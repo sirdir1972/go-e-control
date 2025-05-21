@@ -1,14 +1,15 @@
 // (c) 2025 siridr
-// v0.1 // control go-e charger 
+// v0.11 // control go-e charger 
 
 const ConfigData = {
     statePath: "0_userdata.0.go-e.",
     solarExcess: "0_userdata.0.sumpower.solarExcess",
     RunEvery: 20,
-    minExtra: 700,
+    minExtra: 1300,
     minAmps: 6,
     maxAmps: 16,
     maxMissing: -100,
+    absoluteMaxMissing: 500,
     excessMissingTimes: 3,          // how often too little before stopping
     excessConfirmTimes: 3           // how often enough before starting
 };
@@ -84,7 +85,7 @@ async function getChargerStatusField(field) {
             const statusData = response.data;
             // Ausgabe des Status im logDebug()-Format
             //logDebug(`Charger Status: ${JSON.stringify(statusData, null, 2)}`);
-            logDebug(field + ": " + statusData[field])
+            //logDebug(field + ": " + statusData[field])
             return(statusData[field])
         } else {
             logDebug(`Fehler beim Abrufen des Status. HTTP-Statuscode: ${response.status}`, "error");
@@ -136,6 +137,9 @@ initMyObjectAsBoolean('control',false)
 initMyObjectAsBoolean('oldvalueset',false)
 initMyObjectAsBoolean('charging',false)
 initMyObjectAsNumber("excessMissingCounter", 0);
+initMyObjectAsBoolean("instaCharge",false);
+initMyObjectAsBoolean("instaCharging",false);
+initMyObjectAsBoolean("instaChargeAtNight",false)
 
 async function setControlValues() {
     try {
@@ -147,7 +151,7 @@ async function setControlValues() {
         const ampold = await getChargerStatusField('amp');
         logDebug('ampold: ' + ampold);
         setMyState("oldPower", toInt(ampold));
-        await setChargingCurrent(8); 
+        await setChargingCurrent(6); 
         setMyState("currA", ConfigData.minAmps);
         setMyState('oldvalueset', false);
 
@@ -261,6 +265,27 @@ let excessMissingCounter = 0;
 async function controlCharge() {
     const control = getMyState('control');
     const oldvalueset = getMyState('oldvalueset');
+    const instaCharge = getMyState('instaCharge')
+    const charging = getMyState('charging')
+    const instaCharging = getMyState('instaCharging')
+    //log (instaCharge)
+    //log (instaCharging)
+    if (instaCharge) {
+        logDebug("Instacharge")
+        if (!instaCharging) {
+            if (!oldvalueset) {
+                await setOldValues();
+            }
+            setMyState('control', false)
+            await startCharging();  
+            setMyState('instaCharging',true)     
+ 
+        }
+    } else if (instaCharging) {
+        await stopCharging();
+        setMyState('instaCharging',false)
+        logDebug("stopping instaCharge")
+    }
 
     // === Case 1: Charging control is OFF ===
     if (!control) {
@@ -277,7 +302,7 @@ async function controlCharge() {
 
     await getAmps();  // Get current charging amps
 
-    const charging = getMyState('charging');
+    //const charging = getMyState('charging');
     const solExtra = getState(ConfigData.solarExcess).val;
     const currA = getMyState('currA');
 
@@ -307,7 +332,10 @@ if (!charging) {
         if (solExtra < ConfigData.maxMissing && currA === ConfigData.minAmps) {
             // Too little power and already at minimum charging current – count failures
             excessMissingCounter += 1;
- 
+            if (solExtra < ConfigData.absoluteMaxMissing) {
+                excessMissingCounter = 99
+                logDebug("too much excess missing, stopping immediately")
+            }
             if (excessMissingCounter >= ConfigData.excessMissingTimes) {
                 // Stop charging after too many failures
                 await stopCharging();
@@ -327,5 +355,4 @@ if (!charging) {
         }
     }
 }
-
 
